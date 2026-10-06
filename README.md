@@ -1,0 +1,11 @@
+# vault-titles
+
+A person enters one recorded real-world asset, and that asset can carry exactly one title.
+
+Radiolab is the way into the record: a named asset story, a custodian note, and an archive. Entering the record stores those three and issues nothing.
+
+Collector Crypt, Solflare Packs, and Jupiter Gacha are the title shape: one token is the title to one vaulted slab. Here the title is 1:1 with one recorded asset. The holder can keep it, transfer the title, or redeem it by burning the title and requesting shipment. This version has no pack opening, odds, buyback, or platform token, and no yield, APY, staking, or gambling loop.
+
+v0 is the record itself: `createAsset`, `issueTitle`, and `requestRedeem`. The title id is deterministic from the asset id. A second title for the same asset throws. Redemption marks that title burned and stores a shipment request. No chain transaction runs tonight, and the repository holds no custody keys.
+
+After launch, resume on-chain issuance of the same 1:1 title, transfer of a live title, and fulfillment of a recorded redemption shipment.

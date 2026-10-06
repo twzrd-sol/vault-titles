@@ -1,0 +1,7 @@
+{
+  "name": "vault-titles",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  }
+}
