@@ -2,7 +2,7 @@
 export const holderActions = Object.freeze(["keep", "transfer", "redeem"]);
 
 export function emptyRecord() {
-  return { assets: {}, titles: {}, redemptions: [] };
+  return { assets: {}, titles: {}, redemptions: [], requests: [] };
 }
 
 /** Title id is a pure function of the asset id. */
@@ -20,7 +20,8 @@ function copyRecord(state) {
     state.assets === null ||
     typeof state.titles !== "object" ||
     state.titles === null ||
-    !Array.isArray(state.redemptions)
+    !Array.isArray(state.redemptions) ||
+    !Array.isArray(state.requests)
   ) {
     throw new Error("record state is required");
   }
@@ -32,6 +33,7 @@ function copyRecord(state) {
       Object.entries(state.titles).map(([id, title]) => [id, { ...title }]),
     ),
     redemptions: state.redemptions.map((entry) => ({ ...entry })),
+    requests: state.requests.map((entry) => ({ ...entry })),
   };
 }
 
@@ -56,7 +58,11 @@ export function createAsset(state, input) {
   if (next.assets[id]) {
     throw new Error("asset is already recorded");
   }
-  next.assets[id] = { id, story, custodianNote, archive };
+  const asset = { id, story, custodianNote, archive };
+  if (source.certId != null) asset.certId = requireText(source.certId, "cert id");
+  if (source.frontPhoto != null) asset.frontPhoto = requireText(source.frontPhoto, "front photo");
+  if (source.backPhoto != null) asset.backPhoto = requireText(source.backPhoto, "back photo");
+  next.assets[id] = asset;
   return next;
 }
 
@@ -112,5 +118,44 @@ export function requestRedeem(state, titleId) {
   if (Object.keys(next.assets).join("\0") !== assetIds.join("\0")) {
     throw new Error("redeem must not create an asset");
   }
+  return next;
+}
+
+/** Set the holder action to keep. This is the only holder button that writes the title. */
+export function keepTitle(state, titleId) {
+  const next = copyRecord(state);
+  const title = next.titles[titleId];
+  if (!title) {
+    throw new Error("title not found");
+  }
+  if (title.burned) {
+    throw new Error("title is already burned");
+  }
+  next.titles[titleId] = { ...title, action: "keep", burned: false };
+  return next;
+}
+
+/**
+ * Queue a transfer or redeem request.
+ * The title stays on keep and is not burned.
+ */
+export function queueRequest(state, titleId, action) {
+  const next = copyRecord(state);
+  const title = next.titles[titleId];
+  if (!title) {
+    throw new Error("title not found");
+  }
+  if (action !== "transfer" && action !== "redeem") {
+    throw new Error("queued request must be transfer or redeem");
+  }
+  if (title.burned) {
+    throw new Error("title is already burned");
+  }
+  next.requests.push({
+    titleId,
+    assetId: title.assetId,
+    action,
+    status: "requested",
+  });
   return next;
 }
