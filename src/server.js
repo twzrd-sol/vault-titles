@@ -38,6 +38,20 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+function pendingLabel(action) {
+  if (action === "transfer") return "Pending transfer";
+  if (action === "redeem") return "Pending redeem";
+  return "";
+}
+
+function slabsFrom(record) {
+  return Object.values(record.assets).map((asset) => ({
+    ...asset,
+    title: record.titles[`title:${asset.id}`] ?? null,
+    requests: record.requests.filter((entry) => entry.assetId === asset.id),
+  }));
+}
+
 function renderPage(record) {
   const titles = Object.values(record.titles);
   const untitled = Object.values(record.assets).filter((asset) => !record.titles[`title:${asset.id}`]);
@@ -47,6 +61,10 @@ function renderPage(record) {
     const photos = asset?.certId
       ? `<div class="photos"><img src="/media/${escapeHtml(asset.certId)}/front" alt="Front"><img src="/media/${escapeHtml(asset.certId)}/back" alt="Back"></div>`
       : "";
+    const badges = record.requests
+      .filter((entry) => entry.titleId === title.id && entry.status === "requested")
+      .map((entry) => `<span class="badge">${escapeHtml(pendingLabel(entry.action))}</span>`)
+      .join("");
     return `<article class="slab">
       ${photos}
       <div>
@@ -54,6 +72,7 @@ function renderPage(record) {
         <h2>${escapeHtml(asset?.story ?? title.assetId)}</h2>
         <p>${escapeHtml(asset?.custodianNote ?? "")}</p>
         <p class="held">Holder action: ${escapeHtml(title.action)}${title.burned ? " · burned" : ""}</p>
+        <p class="badges">${badges}</p>
         <div class="actions">
           <button class="keep" data-path="/titles/${encoded}/keep">Keep</button>
           <button class="request" data-path="/titles/${encoded}/transfer">Transfer</button>
@@ -86,7 +105,7 @@ function renderPage(record) {
     button { font: inherit; padding: 8px 14px; cursor: pointer; }
     button.keep { background: #241c16; color: #f6f1e8; border: 0; }
     button.request { background: transparent; border: 1px solid #241c16; }
-    .error { color: #8a2a1a; }
+    .badge { display: inline-block; margin: 0 8px 0 0; padding: 2px 8px; border: 1px solid #8a5a2a; color: #8a5a2a; font-family: ui-monospace, monospace; font-size: 0.75rem; }
     @media (max-width: 640px) { .slab { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -94,6 +113,7 @@ function renderPage(record) {
   <main>
     <h1>Vault titles</h1>
     <p class="lede">One recorded slab. One title. Keep writes the holder action. Transfer and redeem stay requested.</p>
+    <p><button id="refresh" type="button">Refresh</button></p>
     <section class="panel">
       <h2>Enter a slab</h2>
       <form id="enter">
@@ -145,8 +165,15 @@ function renderPage(record) {
         location.reload();
       });
     }
+    document.getElementById("refresh").addEventListener("click", async () => {
+      const response = await fetch("/api/vault");
+      if (!response.ok) return;
+      location.reload();
+    });
     for (const button of document.querySelectorAll("button[data-path]")) {
       button.addEventListener("click", async () => {
+        if (button.dataset.path.endsWith("/transfer") && !confirm("Queue a transfer request?")) return;
+        if (button.dataset.path.endsWith("/redeem") && !confirm("Queue a redeem request?")) return;
         const response = await fetch(button.dataset.path, { method: "POST" });
         if (!response.ok) return;
         location.reload();
@@ -173,8 +200,9 @@ async function handle(req, res, options) {
     send(res, 200, renderPage(record()), "text/html; charset=utf-8");
     return;
   }
-  if (req.method === "GET" && url.pathname === "/record") {
-    send(res, 200, JSON.stringify(record()), "application/json");
+  if (req.method === "GET" && (url.pathname === "/record" || url.pathname === "/api/vault")) {
+    const body = url.pathname === "/api/vault" ? { slabs: slabsFrom(record()) } : record();
+    send(res, 200, JSON.stringify(body), "application/json");
     return;
   }
   const media = url.pathname.match(/^\/media\/([^/]+)\/(front|back)$/);

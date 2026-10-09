@@ -12,7 +12,7 @@ After launch, resume on-chain issuance of the same 1:1 title, transfer of a live
 
 ## Local vault
 
-The record is a SQLite file in `data/vault.sqlite`. Front and back photos are files under `data/photos/<cert-id>/`. Keep writes the holder action. Transfer and redeem are stored as requests and do not burn the title.
+The record is a SQLite file in `data/vault.sqlite`. Front and back photos are files under `data/photos/<cert-id>/`. Keep writes the holder action. Transfer and redeem are stored as requests, shown as Pending transfer and Pending redeem, and do not burn the title. `GET /api/vault` returns the slab list. Refresh re-reads that list. Schema and routes: `docs/architecture.md`.
 
 ```bash
 npm test

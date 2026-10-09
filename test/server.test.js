@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { startVaultServer } from "../src/server.js";
+import { loadVault } from "../src/store.js";
 
 const slab = {
   id: "slab-1",
@@ -65,9 +66,26 @@ test("the page lists a title and only keep writes the holder action", async () =
     assert.deepEqual(record.requests.map((entry) => entry.action), ["transfer", "redeem"]);
     assert.deepEqual(record.redemptions, []);
 
+    const api = await fetch(`${base}/api/vault`).then((response) => response.json());
+    assert.equal(api.slabs.length, 1);
+    assert.equal(api.slabs[0].certId, "cert-100");
+    assert.match(api.slabs[0].frontPhoto, /cert-100/);
+    assert.match(api.slabs[0].backPhoto, /cert-100/);
+    assert.equal(api.slabs[0].title.action, "keep");
+    assert.equal(api.slabs[0].title.burned, false);
+    assert.deepEqual(api.slabs[0].requests.map((entry) => entry.action), ["transfer", "redeem"]);
+
+    const stored = loadVault(join(dir, "vault.sqlite"));
+    assert.equal(stored.titles["title:slab-1"].action, "keep");
+    assert.equal(stored.titles["title:slab-1"].burned, false);
+    assert.deepEqual(stored.requests.map((entry) => entry.status), ["requested", "requested"]);
+
     const after = await fetch(`${base}/`).then((response) => response.text());
-    assert.match(after, /transfer/);
-    assert.match(after, /requested/);
+    assert.match(after, /Pending transfer/);
+    assert.match(after, /Pending redeem/);
+    assert.match(after, />Refresh</);
+    assert.match(after, /confirm\("Queue a transfer request\?"\)/);
+    assert.match(after, /confirm\("Queue a redeem request\?"\)/);
   } finally {
     await server.close();
   }
