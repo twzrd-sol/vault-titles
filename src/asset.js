@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 /** Holder actions live in the model. v0 does not perform them on chain. */
 export const holderActions = Object.freeze(["keep", "transfer", "redeem"]);
 
@@ -168,9 +170,6 @@ export function queueRequest(state, titleId, action) {
   });
   return next;
 }
-import { randomUUID } from "node:crypto";
-
-
 /** Cancel a still-active request without changing or burning its title. */
 export function cancelRequest(state, requestId) {
   const next = copyRecord(state);

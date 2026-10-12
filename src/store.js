@@ -42,7 +42,8 @@ export function discardSlabPhotos(photos) {
 
 function openDb(dbPath) {
   const db = new DatabaseSync(dbPath);
-  db.exec(`
+  try {
+    db.exec(`
     CREATE TABLE IF NOT EXISTS assets (
       id TEXT PRIMARY KEY,
       story TEXT NOT NULL,
@@ -71,14 +72,25 @@ function openDb(dbPath) {
       action TEXT NOT NULL,
       status TEXT NOT NULL
     );
-  `);
-  const requestColumns = db.prepare("PRAGMA table_info(requests)").all();
-  if (!requestColumns.some((column) => column.name === "request_id")) {
-    db.exec("ALTER TABLE requests ADD COLUMN request_id TEXT");
-    db.exec("UPDATE requests SET request_id = 'legacy-request:' || rowid WHERE request_id IS NULL");
-    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS requests_request_id ON requests(request_id)");
+    `);
+    const requestColumns = db.prepare("PRAGMA table_info(requests)").all();
+    if (!requestColumns.some((column) => column.name === "request_id")) {
+      db.exec("BEGIN");
+      try {
+        db.exec("ALTER TABLE requests ADD COLUMN request_id TEXT");
+        db.exec("UPDATE requests SET request_id = 'legacy-request:' || rowid WHERE request_id IS NULL");
+        db.exec("CREATE UNIQUE INDEX IF NOT EXISTS requests_request_id ON requests(request_id)");
+        db.exec("COMMIT");
+      } catch (error) {
+        try { db.exec("ROLLBACK"); } catch {}
+        throw error;
+      }
+    }
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
   }
-  return db;
 }
 
 /** Replace the stored record with this one. */

@@ -67,14 +67,24 @@ test("the page lists a title and only keep writes the holder action", async () =
     const beforeCancel = await fetch(`${base}/record`).then((response) => response.json());
     const transferRequest = beforeCancel.requests.find((entry) => entry.action === "transfer");
     assert.match(transferRequest.id, /^[0-9a-f-]{36}$/);
+    const missingCancel = await fetch(`${base}/requests/missing-request/cancel`, { method: "POST" });
+    assert.equal(missingCancel.status, 400);
+    assert.deepEqual(await fetch(`${base}/record`).then((response) => response.json()), beforeCancel);
     const cancelled = await fetch(`${base}/requests/${encodeURIComponent(transferRequest.id)}/cancel`, { method: "POST" });
     assert.equal(cancelled.status, 200);
     assert.equal(await cancelled.text(), "cancelled");
+    const afterCancel = await fetch(`${base}/record`).then((response) => response.json());
+    const duplicateCancel = await fetch(`${base}/requests/${encodeURIComponent(transferRequest.id)}/cancel`, { method: "POST" });
+    assert.equal(duplicateCancel.status, 400);
+    assert.deepEqual(await fetch(`${base}/record`).then((response) => response.json()), afterCancel);
+    const retriedTransfer = await fetch(`${base}/titles/${encodeURIComponent("title:slab-1")}/transfer`, { method: "POST" });
+    assert.equal(retriedTransfer.status, 202);
 
     const record = await fetch(`${base}/record`).then((response) => response.json());
     assert.equal(record.titles["title:slab-1"].action, "keep");
     assert.equal(record.titles["title:slab-1"].burned, false);
-    assert.deepEqual(record.requests.map((entry) => [entry.action, entry.status]), [["transfer", "cancelled"], ["redeem", "requested"]]);
+    assert.deepEqual(record.requests.map((entry) => [entry.action, entry.status]), [["transfer", "cancelled"], ["redeem", "requested"], ["transfer", "requested"]]);
+    assert.notEqual(record.requests[0].id, record.requests[2].id);
     assert.deepEqual(record.redemptions, []);
 
     const api = await fetch(`${base}/api/vault`).then((response) => response.json());
@@ -84,16 +94,17 @@ test("the page lists a title and only keep writes the holder action", async () =
     assert.match(api.slabs[0].backPhoto, /cert-100/);
     assert.equal(api.slabs[0].title.action, "keep");
     assert.equal(api.slabs[0].title.burned, false);
-    assert.deepEqual(api.slabs[0].requests.map((entry) => entry.action), ["transfer", "redeem"]);
+    assert.deepEqual(api.slabs[0].requests.map((entry) => entry.action), ["transfer", "redeem", "transfer"]);
     assert.ok(api.slabs[0].requests.every((entry) => typeof entry.id === "string" && entry.id.length > 0));
 
     const stored = loadVault(join(dir, "vault.sqlite"));
     assert.equal(stored.titles["title:slab-1"].action, "keep");
     assert.equal(stored.titles["title:slab-1"].burned, false);
-    assert.deepEqual(stored.requests.map((entry) => entry.status), ["cancelled", "requested"]);
+    assert.deepEqual(stored.requests.map((entry) => entry.status), ["cancelled", "requested", "requested"]);
 
     const after = await fetch(`${base}/`).then((response) => response.text());
     assert.match(after, /Pending redeem/);
+    assert.match(after, /Pending transfer/);
     assert.match(after, /transfer cancelled/);
     assert.match(after, /data-cancel="[0-9a-f-]+"/);
     assert.match(after, /confirm\("Cancel this request\?"\)/);

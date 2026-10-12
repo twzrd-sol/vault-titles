@@ -51,7 +51,10 @@ test("active requests deduplicate by title and action, and cancelled requests ca
   assert.equal(cancelled.requests[0].status, "cancelled");
   assert.equal(cancelled.titles["title:slab-1"].action, "keep");
   assert.equal(cancelled.titles["title:slab-1"].burned, false);
+  assert.deepEqual(first.requests[0].status, "requested");
   assert.throws(() => cancelRequest(cancelled, first.requests[0].id), /request is not active/);
+  assert.deepEqual(cancelled.requests[0].status, "cancelled");
+  assert.throws(() => cancelRequest(cancelled, "missing-request"), /request not found/);
   const retried = queueRequest(cancelled, "title:slab-1", "transfer");
   assert.notEqual(retried.requests[1].id, first.requests[0].id);
   assert.equal(retried.requests[1].status, "requested");
