@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -82,4 +82,41 @@ test("photo validation and an existing cert directory preserve current bytes", (
   assert.throws(() => saveSlabPhotos(dir, "cert-100", { front: Buffer.from("replacement-front"), back: Buffer.from("replacement-back") }));
   assert.equal(readFileSync(photos.frontPhoto).toString(), "original-front");
   assert.equal(readFileSync(photos.backPhoto).toString(), "original-back");
+});
+
+test("empty and nonempty destination directories are never replaced", () => {
+  const dir = mkdtempSync(join(tmpdir(), "vault-existing-destinations-"));
+  const empty = join(dir, "cert-empty");
+  const nonempty = join(dir, "cert-nonempty");
+  mkdirSync(empty);
+  mkdirSync(nonempty);
+  writeFileSync(join(nonempty, "original"), "keep me");
+
+  const files = { front: Buffer.from("front"), back: Buffer.from("back") };
+  assert.throws(() => saveSlabPhotos(dir, "cert-empty", files), /EEXIST/);
+  assert.throws(() => saveSlabPhotos(dir, "cert-nonempty", files), /EEXIST/);
+  assert.deepEqual(readdirSync(empty), []);
+  assert.deepEqual(readdirSync(nonempty), ["original"]);
+  assert.equal(readFileSync(join(nonempty, "original")).toString(), "keep me");
+});
+
+test("a photo write failure removes only files and directory owned by that write", () => {
+  const dir = mkdtempSync(join(tmpdir(), "vault-photo-write-failure-"));
+  const existing = join(dir, "cert-existing");
+  mkdirSync(existing);
+  writeFileSync(join(existing, "original"), "keep me");
+  let writes = 0;
+  const writePhoto = (fd, bytes) => {
+    writes += 1;
+    if (writes === 2) throw new Error("forced photo write failure");
+    writeFileSync(fd, bytes);
+  };
+
+  assert.throws(
+    () => saveSlabPhotos(dir, "cert-new", { front: Buffer.from("front"), back: Buffer.from("back") }, { writePhoto }),
+    /forced photo write failure/,
+  );
+  assert.equal(existsSync(join(dir, "cert-new")), false);
+  assert.deepEqual(readdirSync(existing), ["original"]);
+  assert.equal(readFileSync(join(existing, "original")).toString(), "keep me");
 });
