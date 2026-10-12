@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -86,6 +86,43 @@ test("the page lists a title and only keep writes the holder action", async () =
     assert.match(after, />Refresh</);
     assert.match(after, /confirm\("Queue a transfer request\?"\)/);
     assert.match(after, /confirm\("Queue a redeem request\?"\)/);
+  } finally {
+    await server.close();
+  }
+});
+
+test("invalid assets and duplicate cert ids preserve rows and existing photos", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vault-atomic-assets-"));
+  const photoDir = join(dir, "photos");
+  const server = await startVaultServer({ dbPath: join(dir, "vault.sqlite"), photoDir, host: "127.0.0.1", port: 0 });
+  const base = `http://127.0.0.1:${server.port}`;
+  try {
+    const created = await fetch(`${base}/assets`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(slab),
+    });
+    assert.equal(created.status, 201);
+
+    const duplicateCert = await fetch(`${base}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...slab, id: "slab-2", frontBase64: "bmV3LWZyb250", backBase64: "bmV3LWJhY2s=" }),
+    });
+    assert.equal(duplicateCert.status, 400);
+    assert.match(await duplicateCert.text(), /cert id is already recorded/);
+
+    const duplicateAsset = await fetch(`${base}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...slab, certId: "cert-200" }),
+    });
+    assert.equal(duplicateAsset.status, 400);
+    assert.match(await duplicateAsset.text(), /asset is already recorded/);
+
+    const stored = loadVault(join(dir, "vault.sqlite"));
+    assert.deepEqual(Object.keys(stored.assets), ["slab-1"]);
+    assert.equal(readFileSync(join(photoDir, "cert-100", "front")).toString(), "front-bytes");
+    assert.equal(readFileSync(join(photoDir, "cert-100", "back")).toString(), "back-bytes");
+    assert.equal(existsSync(join(photoDir, "cert-200")), false);
   } finally {
     await server.close();
   }

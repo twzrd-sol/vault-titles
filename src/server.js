@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createAsset, issueTitle, keepTitle, queueRequest } from "./asset.js";
-import { loadVault, saveSlabPhotos, saveVault } from "./store.js";
+import { discardSlabPhotos, loadVault, saveSlabPhotos, saveVault } from "./store.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -222,11 +222,25 @@ async function handle(req, res, options) {
   }
   if (req.method === "POST" && url.pathname === "/assets") {
     const body = JSON.parse((await readBody(req)).toString() || "{}");
+    const next = createAsset(record(), {
+      id: body.id,
+      story: body.story,
+      custodianNote: body.custodianNote,
+      archive: body.archive,
+      certId: body.certId,
+    });
     const photos = saveSlabPhotos(options.photoDir, body.certId, {
       front: Buffer.from(body.frontBase64 ?? "", "base64"),
       back: Buffer.from(body.backBase64 ?? "", "base64"),
     });
-    persist(createAsset(record(), { ...body, ...photos }));
+    next.assets[body.id].frontPhoto = photos.frontPhoto;
+    next.assets[body.id].backPhoto = photos.backPhoto;
+    try {
+      persist(next);
+    } catch (error) {
+      discardSlabPhotos(photos);
+      throw error;
+    }
     send(res, 201, "recorded", "text/plain; charset=utf-8");
     return;
   }

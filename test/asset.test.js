@@ -26,6 +26,15 @@ test("entering a record stores the story, custodian note, and archive and does n
   assert.deepEqual(entered.redemptions, []);
 });
 
+test("a cert id can belong to only one recorded asset", () => {
+  const entered = createAsset(emptyRecord(), { ...slab, certId: "cert-100" });
+  assert.throws(
+    () => createAsset(entered, { ...slab, id: "slab-2", certId: "cert-100" }),
+    /cert id is already recorded/,
+  );
+  assert.equal(Object.keys(entered.assets).length, 1);
+});
+
 test("issueTitle id is deterministic from the asset id and a second issue throws", () => {
   const entered = createAsset(emptyRecord(), slab);
   const issued = issueTitle(entered, "slab-1");

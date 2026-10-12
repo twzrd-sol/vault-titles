@@ -1,5 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { emptyRecord } from "./asset.js";
 
@@ -13,15 +13,31 @@ function certFolder(certId) {
 /** Write front and back bytes under a directory named for the cert id. */
 export function saveSlabPhotos(dir, certId, files) {
   const folder = join(dir, certFolder(certId));
-  mkdirSync(folder, { recursive: true });
   const front = files?.front;
   const back = files?.back;
-  if (!front || !back) throw new Error("front and back photos are required");
+  if (!Buffer.isBuffer(front) || front.length === 0 || !Buffer.isBuffer(back) || back.length === 0) {
+    throw new Error("front and back photos are required");
+  }
+  mkdirSync(dir, { recursive: true });
+  const staging = mkdtempSync(join(dir, `.${certId}-`));
   const frontPhoto = join(folder, "front");
   const backPhoto = join(folder, "back");
-  writeFileSync(frontPhoto, front);
-  writeFileSync(backPhoto, back);
-  return { frontPhoto, backPhoto };
+  try {
+    writeFileSync(join(staging, "front"), front);
+    writeFileSync(join(staging, "back"), back);
+    renameSync(staging, folder);
+    return { frontPhoto, backPhoto };
+  } catch (error) {
+    rmSync(staging, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/** Remove a newly-created photo directory when its matching record could not be saved. */
+export function discardSlabPhotos(photos) {
+  if (photos?.frontPhoto && photos?.backPhoto && dirname(photos.frontPhoto) === dirname(photos.backPhoto)) {
+    rmSync(dirname(photos.frontPhoto), { recursive: true, force: true });
+  }
 }
 
 function openDb(dbPath) {

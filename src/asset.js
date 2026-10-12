@@ -59,7 +59,12 @@ export function createAsset(state, input) {
     throw new Error("asset is already recorded");
   }
   const asset = { id, story, custodianNote, archive };
-  if (source.certId != null) asset.certId = requireText(source.certId, "cert id");
+  if (source.certId != null) {
+    asset.certId = requireText(source.certId, "cert id");
+    if (Object.values(next.assets).some((existing) => existing.certId === asset.certId)) {
+      throw new Error("cert id is already recorded");
+    }
+  }
   if (source.frontPhoto != null) asset.frontPhoto = requireText(source.frontPhoto, "front photo");
   if (source.backPhoto != null) asset.backPhoto = requireText(source.backPhoto, "back photo");
   next.assets[id] = asset;
