@@ -58,13 +58,23 @@ test("the page lists a title and only keep writes the holder action", async () =
     assert.equal(kept.status, 200);
     const transfer = await fetch(`${base}/titles/${encodeURIComponent("title:slab-1")}/transfer`, { method: "POST" });
     assert.equal(transfer.status, 202);
+    const duplicateTransfer = await fetch(`${base}/titles/${encodeURIComponent("title:slab-1")}/transfer`, { method: "POST" });
+    assert.equal(duplicateTransfer.status, 400);
+    assert.match(await duplicateTransfer.text(), /active transfer request already exists/);
     const redeem = await fetch(`${base}/titles/${encodeURIComponent("title:slab-1")}/redeem`, { method: "POST" });
     assert.equal(redeem.status, 202);
+
+    const beforeCancel = await fetch(`${base}/record`).then((response) => response.json());
+    const transferRequest = beforeCancel.requests.find((entry) => entry.action === "transfer");
+    assert.match(transferRequest.id, /^[0-9a-f-]{36}$/);
+    const cancelled = await fetch(`${base}/requests/${encodeURIComponent(transferRequest.id)}/cancel`, { method: "POST" });
+    assert.equal(cancelled.status, 200);
+    assert.equal(await cancelled.text(), "cancelled");
 
     const record = await fetch(`${base}/record`).then((response) => response.json());
     assert.equal(record.titles["title:slab-1"].action, "keep");
     assert.equal(record.titles["title:slab-1"].burned, false);
-    assert.deepEqual(record.requests.map((entry) => entry.action), ["transfer", "redeem"]);
+    assert.deepEqual(record.requests.map((entry) => [entry.action, entry.status]), [["transfer", "cancelled"], ["redeem", "requested"]]);
     assert.deepEqual(record.redemptions, []);
 
     const api = await fetch(`${base}/api/vault`).then((response) => response.json());
@@ -75,15 +85,18 @@ test("the page lists a title and only keep writes the holder action", async () =
     assert.equal(api.slabs[0].title.action, "keep");
     assert.equal(api.slabs[0].title.burned, false);
     assert.deepEqual(api.slabs[0].requests.map((entry) => entry.action), ["transfer", "redeem"]);
+    assert.ok(api.slabs[0].requests.every((entry) => typeof entry.id === "string" && entry.id.length > 0));
 
     const stored = loadVault(join(dir, "vault.sqlite"));
     assert.equal(stored.titles["title:slab-1"].action, "keep");
     assert.equal(stored.titles["title:slab-1"].burned, false);
-    assert.deepEqual(stored.requests.map((entry) => entry.status), ["requested", "requested"]);
+    assert.deepEqual(stored.requests.map((entry) => entry.status), ["cancelled", "requested"]);
 
     const after = await fetch(`${base}/`).then((response) => response.text());
-    assert.match(after, /Pending transfer/);
     assert.match(after, /Pending redeem/);
+    assert.match(after, /transfer cancelled/);
+    assert.match(after, /data-cancel="[0-9a-f-]+"/);
+    assert.match(after, /confirm\("Cancel this request\?"\)/);
     assert.match(after, />Refresh</);
     assert.match(after, /confirm\("Queue a transfer request\?"\)/);
     assert.match(after, /confirm\("Queue a redeem request\?"\)/);

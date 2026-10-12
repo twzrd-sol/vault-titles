@@ -156,11 +156,29 @@ export function queueRequest(state, titleId, action) {
   if (title.burned) {
     throw new Error("title is already burned");
   }
+  if (next.requests.some((request) => request.titleId === titleId && request.action === action && request.status === "requested")) {
+    throw new Error(`an active ${action} request already exists`);
+  }
   next.requests.push({
+    id: randomUUID(),
     titleId,
     assetId: title.assetId,
     action,
     status: "requested",
   });
+  return next;
+}
+import { randomUUID } from "node:crypto";
+
+
+/** Cancel a still-active request without changing or burning its title. */
+export function cancelRequest(state, requestId) {
+  const next = copyRecord(state);
+  const request = next.requests.find((entry) => entry.id === requestId);
+  if (!request) throw new Error("request not found");
+  if (request.status !== "requested") throw new Error("request is not active");
+  const title = next.titles[request.titleId];
+  if (!title) throw new Error("title not found");
+  next.requests = next.requests.map((entry) => entry.id === requestId ? { ...entry, status: "cancelled" } : entry);
   return next;
 }

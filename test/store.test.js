@@ -46,7 +46,7 @@ test("photo files are stored under the cert id and the saved record reloads", ()
   assert.equal(loaded.titles["title:slab-1"].action, "keep");
   assert.equal(loaded.titles["title:slab-1"].burned, false);
   assert.deepEqual(loaded.requests, [
-    { titleId: "title:slab-1", assetId: "slab-1", action: "transfer", status: "requested" },
+    { id: queued.requests[0].id, titleId: "title:slab-1", assetId: "slab-1", action: "transfer", status: "requested" },
   ]);
   assert.deepEqual(loaded.redemptions, []);
 
@@ -82,4 +82,21 @@ test("photo validation and an existing cert directory preserve current bytes", (
   assert.throws(() => saveSlabPhotos(dir, "cert-100", { front: Buffer.from("replacement-front"), back: Buffer.from("replacement-back") }));
   assert.equal(readFileSync(photos.frontPhoto).toString(), "original-front");
   assert.equal(readFileSync(photos.backPhoto).toString(), "original-back");
+});
+
+test("request IDs are added to existing local request rows and survive a save", () => {
+  const dir = mkdtempSync(join(tmpdir(), "vault-legacy-requests-"));
+  const dbPath = join(dir, "vault.sqlite");
+  const legacy = new DatabaseSync(dbPath);
+  legacy.exec(`
+    CREATE TABLE requests (title_id TEXT NOT NULL, asset_id TEXT NOT NULL, action TEXT NOT NULL, status TEXT NOT NULL);
+    INSERT INTO requests VALUES ('title:slab-1', 'slab-1', 'transfer', 'requested');
+  `);
+  legacy.close();
+
+  const loaded = loadVault(dbPath);
+  assert.equal(loaded.requests.length, 1);
+  assert.equal(loaded.requests[0].id, "legacy-request:1");
+  saveVault(dbPath, loaded);
+  assert.deepEqual(loadVault(dbPath).requests, loaded.requests);
 });

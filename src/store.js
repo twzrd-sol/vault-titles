@@ -65,12 +65,19 @@ function openDb(dbPath) {
       status TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS requests (
+      request_id TEXT NOT NULL UNIQUE,
       title_id TEXT NOT NULL,
       asset_id TEXT NOT NULL,
       action TEXT NOT NULL,
       status TEXT NOT NULL
     );
   `);
+  const requestColumns = db.prepare("PRAGMA table_info(requests)").all();
+  if (!requestColumns.some((column) => column.name === "request_id")) {
+    db.exec("ALTER TABLE requests ADD COLUMN request_id TEXT");
+    db.exec("UPDATE requests SET request_id = 'legacy-request:' || rowid WHERE request_id IS NULL");
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS requests_request_id ON requests(request_id)");
+  }
   return db;
 }
 
@@ -95,7 +102,7 @@ export function saveVault(dbPath, state) {
       `INSERT INTO redemptions (title_id, asset_id, action, status) VALUES (?, ?, ?, ?)`,
     );
     const insertRequest = db.prepare(
-      `INSERT INTO requests (title_id, asset_id, action, status) VALUES (?, ?, ?, ?)`,
+      `INSERT INTO requests (request_id, title_id, asset_id, action, status) VALUES (?, ?, ?, ?, ?)`,
     );
     db.exec("BEGIN");
     db.exec("DELETE FROM requests; DELETE FROM redemptions; DELETE FROM titles; DELETE FROM assets;");
@@ -109,7 +116,7 @@ export function saveVault(dbPath, state) {
       insertRedemption.run(entry.titleId, entry.assetId, entry.action, entry.status);
     }
     for (const entry of state.requests) {
-      insertRequest.run(entry.titleId, entry.assetId, entry.action, entry.status);
+      insertRequest.run(entry.id, entry.titleId, entry.assetId, entry.action, entry.status);
     }
     db.exec("COMMIT");
   } catch (error) {
@@ -152,8 +159,9 @@ export function loadVault(dbPath) {
       status: row.status,
     });
   }
-  for (const row of db.prepare("SELECT title_id, asset_id, action, status FROM requests").all()) {
+  for (const row of db.prepare("SELECT request_id, title_id, asset_id, action, status FROM requests").all()) {
     record.requests.push({
+      id: row.request_id,
       titleId: row.title_id,
       assetId: row.asset_id,
       action: row.action,

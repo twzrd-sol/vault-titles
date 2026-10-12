@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createAsset, emptyRecord, issueTitle, keepTitle, queueRequest } from "../src/asset.js";
+import { cancelRequest, createAsset, emptyRecord, issueTitle, keepTitle, queueRequest } from "../src/asset.js";
 
 const slab = {
   id: "slab-1",
@@ -29,9 +29,11 @@ test("transfer and redeem queue requests and leave the title on keep", () => {
   assert.equal(redeemed.titles["title:slab-1"].burned, false);
   assert.deepEqual(redeemed.redemptions, []);
   assert.deepEqual(redeemed.requests, [
-    { titleId: "title:slab-1", assetId: "slab-1", action: "transfer", status: "requested" },
-    { titleId: "title:slab-1", assetId: "slab-1", action: "redeem", status: "requested" },
+    { id: transferred.requests[0].id, titleId: "title:slab-1", assetId: "slab-1", action: "transfer", status: "requested" },
+    { id: redeemed.requests[1].id, titleId: "title:slab-1", assetId: "slab-1", action: "redeem", status: "requested" },
   ]);
+  assert.match(redeemed.requests[0].id, /^[0-9a-f-]{36}$/);
+  assert.notEqual(redeemed.requests[0].id, redeemed.requests[1].id);
   assert.deepEqual(prior.requests, []);
   assert.equal(prior.titles["title:slab-1"].burned, false);
 });
@@ -40,4 +42,17 @@ test("a queued request cannot be keep, and a missing title cannot be queued", ()
   const prior = issued();
   assert.throws(() => queueRequest(prior, "title:slab-1", "keep"), /queued request/);
   assert.throws(() => queueRequest(prior, "title:missing", "transfer"), /title not found/);
+});
+
+test("active requests deduplicate by title and action, and cancelled requests can be retried", () => {
+  const first = queueRequest(issued(), "title:slab-1", "transfer");
+  assert.throws(() => queueRequest(first, "title:slab-1", "transfer"), /active transfer request already exists/);
+  const cancelled = cancelRequest(first, first.requests[0].id);
+  assert.equal(cancelled.requests[0].status, "cancelled");
+  assert.equal(cancelled.titles["title:slab-1"].action, "keep");
+  assert.equal(cancelled.titles["title:slab-1"].burned, false);
+  assert.throws(() => cancelRequest(cancelled, first.requests[0].id), /request is not active/);
+  const retried = queueRequest(cancelled, "title:slab-1", "transfer");
+  assert.notEqual(retried.requests[1].id, first.requests[0].id);
+  assert.equal(retried.requests[1].status, "requested");
 });
