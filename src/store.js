@@ -76,44 +76,48 @@ function openDb(dbPath) {
 
 /** Replace the stored record with this one. */
 export function saveVault(dbPath, state) {
+  const certIds = Object.values(state?.assets ?? {})
+    .map((asset) => asset.certId)
+    .filter((certId) => certId != null);
+  if (new Set(certIds).size !== certIds.length) {
+    throw new Error("cert id is already recorded");
+  }
   const db = openDb(dbPath);
-  const insertAsset = db.prepare(
-    `INSERT INTO assets (id, story, custodian_note, archive, cert_id, front_photo, back_photo)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  );
-  const insertTitle = db.prepare(
-    `INSERT INTO titles (id, asset_id, burned, action) VALUES (?, ?, ?, ?)`,
-  );
-  const insertRedemption = db.prepare(
-    `INSERT INTO redemptions (title_id, asset_id, action, status) VALUES (?, ?, ?, ?)`,
-  );
-  const insertRequest = db.prepare(
-    `INSERT INTO requests (title_id, asset_id, action, status) VALUES (?, ?, ?, ?)`,
-  );
-  db.exec("BEGIN");
-  db.exec("DELETE FROM requests; DELETE FROM redemptions; DELETE FROM titles; DELETE FROM assets;");
-  for (const asset of Object.values(state.assets)) {
-    insertAsset.run(
-      asset.id,
-      asset.story,
-      asset.custodianNote,
-      asset.archive,
-      asset.certId ?? null,
-      asset.frontPhoto ?? null,
-      asset.backPhoto ?? null,
+  try {
+    const insertAsset = db.prepare(
+      `INSERT INTO assets (id, story, custodian_note, archive, cert_id, front_photo, back_photo)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
     );
+    const insertTitle = db.prepare(
+      `INSERT INTO titles (id, asset_id, burned, action) VALUES (?, ?, ?, ?)`,
+    );
+    const insertRedemption = db.prepare(
+      `INSERT INTO redemptions (title_id, asset_id, action, status) VALUES (?, ?, ?, ?)`,
+    );
+    const insertRequest = db.prepare(
+      `INSERT INTO requests (title_id, asset_id, action, status) VALUES (?, ?, ?, ?)`,
+    );
+    db.exec("BEGIN");
+    db.exec("DELETE FROM requests; DELETE FROM redemptions; DELETE FROM titles; DELETE FROM assets;");
+    for (const asset of Object.values(state.assets)) {
+      insertAsset.run(asset.id, asset.story, asset.custodianNote, asset.archive, asset.certId ?? null, asset.frontPhoto ?? null, asset.backPhoto ?? null);
+    }
+    for (const title of Object.values(state.titles)) {
+      insertTitle.run(title.id, title.assetId, title.burned ? 1 : 0, title.action);
+    }
+    for (const entry of state.redemptions) {
+      insertRedemption.run(entry.titleId, entry.assetId, entry.action, entry.status);
+    }
+    for (const entry of state.requests) {
+      insertRequest.run(entry.titleId, entry.assetId, entry.action, entry.status);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    try { db.exec("ROLLBACK"); } catch {}
+    throw error;
+  } finally {
+    db.close();
   }
-  for (const title of Object.values(state.titles)) {
-    insertTitle.run(title.id, title.assetId, title.burned ? 1 : 0, title.action);
-  }
-  for (const entry of state.redemptions) {
-    insertRedemption.run(entry.titleId, entry.assetId, entry.action, entry.status);
-  }
-  for (const entry of state.requests) {
-    insertRequest.run(entry.titleId, entry.assetId, entry.action, entry.status);
-  }
-  db.exec("COMMIT");
-  db.close();
 }
 
 /** Load the record. A missing file still opens as an empty vault. */

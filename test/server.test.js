@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { startVaultServer } from "../src/server.js";
 import { loadVault } from "../src/store.js";
@@ -123,6 +124,44 @@ test("invalid assets and duplicate cert ids preserve rows and existing photos", 
     assert.equal(readFileSync(join(photoDir, "cert-100", "front")).toString(), "front-bytes");
     assert.equal(readFileSync(join(photoDir, "cert-100", "back")).toString(), "back-bytes");
     assert.equal(existsSync(join(photoDir, "cert-200")), false);
+  } finally {
+    await server.close();
+  }
+});
+
+test("a failed record save removes its staged photos and preserves the original record", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vault-save-failure-"));
+  const dbPath = join(dir, "vault.sqlite");
+  const photoDir = join(dir, "photos");
+  const server = await startVaultServer({ dbPath, photoDir, host: "127.0.0.1", port: 0 });
+  const base = `http://127.0.0.1:${server.port}`;
+  try {
+    const created = await fetch(`${base}/assets`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(slab),
+    });
+    assert.equal(created.status, 201);
+    const db = new DatabaseSync(dbPath);
+    db.exec(`CREATE TRIGGER reject_slab_2 BEFORE INSERT ON assets WHEN NEW.id = 'slab-2'
+      BEGIN SELECT RAISE(ABORT, 'forced persistence failure'); END`);
+    db.close();
+
+    const rejected = await fetch(`${base}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...slab, id: "slab-2", certId: "cert-200" }),
+    });
+    assert.equal(rejected.status, 400);
+    assert.match(await rejected.text(), /forced persistence failure/);
+    assert.deepEqual(Object.keys(loadVault(dbPath).assets), ["slab-1"]);
+    assert.equal(readFileSync(join(photoDir, "cert-100", "front")).toString(), "front-bytes");
+    assert.equal(readFileSync(join(photoDir, "cert-100", "back")).toString(), "back-bytes");
+    assert.equal(existsSync(join(photoDir, "cert-200")), false);
+
+    const triggerDb = new DatabaseSync(dbPath);
+    triggerDb.exec("DROP TRIGGER reject_slab_2");
+    triggerDb.close();
+    const stillUsable = await fetch(`${base}/record`).then((response) => response.json());
+    assert.deepEqual(Object.keys(stillUsable.assets), ["slab-1"]);
   } finally {
     await server.close();
   }
