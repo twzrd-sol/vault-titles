@@ -1,5 +1,5 @@
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { closeSync, mkdirSync, mkdtempSync, openSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { emptyRecord } from "./asset.js";
 
@@ -11,7 +11,7 @@ function certFolder(certId) {
 }
 
 /** Write front and back bytes under a directory named for the cert id. */
-export function saveSlabPhotos(dir, certId, files) {
+export function saveSlabPhotos(dir, certId, files, { writePhoto = (fd, bytes) => writeFileSync(fd, bytes) } = {}) {
   const folder = join(dir, certFolder(certId));
   const front = files?.front;
   const back = files?.back;
@@ -19,25 +19,46 @@ export function saveSlabPhotos(dir, certId, files) {
     throw new Error("front and back photos are required");
   }
   mkdirSync(dir, { recursive: true });
-  const staging = mkdtempSync(join(dir, `.${certId}-`));
+  const staging = mkdtempSync(join(dir, ".staging-"));
   const frontPhoto = join(folder, "front");
   const backPhoto = join(folder, "back");
+  let ownsFolder = false;
+  const createdFiles = new Set();
+  const cleanupOwnedPhotos = () => {
+    for (const path of createdFiles) {
+      try { unlinkSync(path); } catch (error) { if (error.code !== "ENOENT") throw error; }
+    }
+    if (ownsFolder) {
+      try { rmdirSync(folder); } catch (error) { if (error.code !== "ENOENT" && error.code !== "ENOTEMPTY" && error.code !== "EEXIST") throw error; }
+      ownsFolder = false;
+    }
+  };
   try {
     writeFileSync(join(staging, "front"), front);
     writeFileSync(join(staging, "back"), back);
-    renameSync(staging, folder);
-    return { frontPhoto, backPhoto };
+    mkdirSync(folder);
+    ownsFolder = true;
+    for (const [path, bytes] of [[frontPhoto, front], [backPhoto, back]]) {
+      const fd = openSync(path, "wx");
+      createdFiles.add(path);
+      try { writePhoto(fd, bytes); } finally { closeSync(fd); }
+    }
+    const photos = { frontPhoto, backPhoto };
+    photoOwnership.set(photos, cleanupOwnedPhotos);
+    return photos;
   } catch (error) {
-    rmSync(staging, { recursive: true, force: true });
+    cleanupOwnedPhotos();
     throw error;
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
   }
 }
 
-/** Remove a newly-created photo directory when its matching record could not be saved. */
+const photoOwnership = new WeakMap();
+
+/** Remove only files and directories created by saveSlabPhotos for this result. */
 export function discardSlabPhotos(photos) {
-  if (photos?.frontPhoto && photos?.backPhoto && dirname(photos.frontPhoto) === dirname(photos.backPhoto)) {
-    rmSync(dirname(photos.frontPhoto), { recursive: true, force: true });
-  }
+  photoOwnership.get(photos)?.();
 }
 
 function openDb(dbPath) {
