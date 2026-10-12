@@ -17,7 +17,6 @@ The record is a SQLite file in `data/vault.sqlite`. Front and back photos are fi
 ```bash
 npm test
 npm start
-HOST=100.111.36.55 npm start
 ```
 
-`npm start` listens on `127.0.0.1:4177`. `HOST` changes the bind address, so the same port is reachable on the tailnet.
+`npm start` listens on `127.0.0.1:4177`. `HOST` changes the bind address. The server has no authentication and accepts writes, so keep it on loopback: any other address exposes it to every machine that can reach that address.
