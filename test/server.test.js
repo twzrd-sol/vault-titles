@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { startVaultServer } from "../src/server.js";
 import { loadVault } from "../src/store.js";
@@ -57,13 +58,33 @@ test("the page lists a title and only keep writes the holder action", async () =
     assert.equal(kept.status, 200);
     const transfer = await fetch(`${base}/titles/${encodeURIComponent("title:slab-1")}/transfer`, { method: "POST" });
     assert.equal(transfer.status, 202);
+    const duplicateTransfer = await fetch(`${base}/titles/${encodeURIComponent("title:slab-1")}/transfer`, { method: "POST" });
+    assert.equal(duplicateTransfer.status, 400);
+    assert.match(await duplicateTransfer.text(), /active transfer request already exists/);
     const redeem = await fetch(`${base}/titles/${encodeURIComponent("title:slab-1")}/redeem`, { method: "POST" });
     assert.equal(redeem.status, 202);
+
+    const beforeCancel = await fetch(`${base}/record`).then((response) => response.json());
+    const transferRequest = beforeCancel.requests.find((entry) => entry.action === "transfer");
+    assert.match(transferRequest.id, /^[0-9a-f-]{36}$/);
+    const missingCancel = await fetch(`${base}/requests/missing-request/cancel`, { method: "POST" });
+    assert.equal(missingCancel.status, 400);
+    assert.deepEqual(await fetch(`${base}/record`).then((response) => response.json()), beforeCancel);
+    const cancelled = await fetch(`${base}/requests/${encodeURIComponent(transferRequest.id)}/cancel`, { method: "POST" });
+    assert.equal(cancelled.status, 200);
+    assert.equal(await cancelled.text(), "cancelled");
+    const afterCancel = await fetch(`${base}/record`).then((response) => response.json());
+    const duplicateCancel = await fetch(`${base}/requests/${encodeURIComponent(transferRequest.id)}/cancel`, { method: "POST" });
+    assert.equal(duplicateCancel.status, 400);
+    assert.deepEqual(await fetch(`${base}/record`).then((response) => response.json()), afterCancel);
+    const retriedTransfer = await fetch(`${base}/titles/${encodeURIComponent("title:slab-1")}/transfer`, { method: "POST" });
+    assert.equal(retriedTransfer.status, 202);
 
     const record = await fetch(`${base}/record`).then((response) => response.json());
     assert.equal(record.titles["title:slab-1"].action, "keep");
     assert.equal(record.titles["title:slab-1"].burned, false);
-    assert.deepEqual(record.requests.map((entry) => entry.action), ["transfer", "redeem"]);
+    assert.deepEqual(record.requests.map((entry) => [entry.action, entry.status]), [["transfer", "cancelled"], ["redeem", "requested"], ["transfer", "requested"]]);
+    assert.notEqual(record.requests[0].id, record.requests[2].id);
     assert.deepEqual(record.redemptions, []);
 
     const api = await fetch(`${base}/api/vault`).then((response) => response.json());
@@ -73,19 +94,98 @@ test("the page lists a title and only keep writes the holder action", async () =
     assert.match(api.slabs[0].backPhoto, /cert-100/);
     assert.equal(api.slabs[0].title.action, "keep");
     assert.equal(api.slabs[0].title.burned, false);
-    assert.deepEqual(api.slabs[0].requests.map((entry) => entry.action), ["transfer", "redeem"]);
+    assert.deepEqual(api.slabs[0].requests.map((entry) => entry.action), ["transfer", "redeem", "transfer"]);
+    assert.ok(api.slabs[0].requests.every((entry) => typeof entry.id === "string" && entry.id.length > 0));
 
     const stored = loadVault(join(dir, "vault.sqlite"));
     assert.equal(stored.titles["title:slab-1"].action, "keep");
     assert.equal(stored.titles["title:slab-1"].burned, false);
-    assert.deepEqual(stored.requests.map((entry) => entry.status), ["requested", "requested"]);
+    assert.deepEqual(stored.requests.map((entry) => entry.status), ["cancelled", "requested", "requested"]);
 
     const after = await fetch(`${base}/`).then((response) => response.text());
-    assert.match(after, /Pending transfer/);
     assert.match(after, /Pending redeem/);
+    assert.match(after, /Pending transfer/);
+    assert.match(after, /transfer cancelled/);
+    assert.match(after, /data-cancel="[0-9a-f-]+"/);
+    assert.match(after, /confirm\("Cancel this request\?"\)/);
     assert.match(after, />Refresh</);
     assert.match(after, /confirm\("Queue a transfer request\?"\)/);
     assert.match(after, /confirm\("Queue a redeem request\?"\)/);
+  } finally {
+    await server.close();
+  }
+});
+
+test("invalid assets and duplicate cert ids preserve rows and existing photos", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vault-atomic-assets-"));
+  const photoDir = join(dir, "photos");
+  const server = await startVaultServer({ dbPath: join(dir, "vault.sqlite"), photoDir, host: "127.0.0.1", port: 0 });
+  const base = `http://127.0.0.1:${server.port}`;
+  try {
+    const created = await fetch(`${base}/assets`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(slab),
+    });
+    assert.equal(created.status, 201);
+
+    const duplicateCert = await fetch(`${base}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...slab, id: "slab-2", frontBase64: "bmV3LWZyb250", backBase64: "bmV3LWJhY2s=" }),
+    });
+    assert.equal(duplicateCert.status, 400);
+    assert.match(await duplicateCert.text(), /cert id is already recorded/);
+
+    const duplicateAsset = await fetch(`${base}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...slab, certId: "cert-200" }),
+    });
+    assert.equal(duplicateAsset.status, 400);
+    assert.match(await duplicateAsset.text(), /asset is already recorded/);
+
+    const stored = loadVault(join(dir, "vault.sqlite"));
+    assert.deepEqual(Object.keys(stored.assets), ["slab-1"]);
+    assert.equal(readFileSync(join(photoDir, "cert-100", "front")).toString(), "front-bytes");
+    assert.equal(readFileSync(join(photoDir, "cert-100", "back")).toString(), "back-bytes");
+    assert.equal(existsSync(join(photoDir, "cert-200")), false);
+  } finally {
+    await server.close();
+  }
+});
+
+test("a failed record save removes its staged photos and preserves the original record", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "vault-save-failure-"));
+  const dbPath = join(dir, "vault.sqlite");
+  const photoDir = join(dir, "photos");
+  const server = await startVaultServer({ dbPath, photoDir, host: "127.0.0.1", port: 0 });
+  const base = `http://127.0.0.1:${server.port}`;
+  try {
+    const created = await fetch(`${base}/assets`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(slab),
+    });
+    assert.equal(created.status, 201);
+    const db = new DatabaseSync(dbPath);
+    db.exec(`CREATE TRIGGER reject_slab_2 BEFORE INSERT ON assets WHEN NEW.id = 'slab-2'
+      BEGIN SELECT RAISE(ABORT, 'forced persistence failure'); END`);
+    db.close();
+
+    const rejected = await fetch(`${base}/assets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...slab, id: "slab-2", certId: "cert-200" }),
+    });
+    assert.equal(rejected.status, 400);
+    assert.match(await rejected.text(), /forced persistence failure/);
+    assert.deepEqual(Object.keys(loadVault(dbPath).assets), ["slab-1"]);
+    assert.equal(readFileSync(join(photoDir, "cert-100", "front")).toString(), "front-bytes");
+    assert.equal(readFileSync(join(photoDir, "cert-100", "back")).toString(), "back-bytes");
+    assert.equal(existsSync(join(photoDir, "cert-200")), false);
+
+    const triggerDb = new DatabaseSync(dbPath);
+    triggerDb.exec("DROP TRIGGER reject_slab_2");
+    triggerDb.close();
+    const stillUsable = await fetch(`${base}/record`).then((response) => response.json());
+    assert.deepEqual(Object.keys(stillUsable.assets), ["slab-1"]);
   } finally {
     await server.close();
   }

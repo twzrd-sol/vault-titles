@@ -2,8 +2,8 @@ import { createServer } from "node:http";
 import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createAsset, issueTitle, keepTitle, queueRequest } from "./asset.js";
-import { loadVault, saveSlabPhotos, saveVault } from "./store.js";
+import { cancelRequest, createAsset, issueTitle, keepTitle, queueRequest } from "./asset.js";
+import { discardSlabPhotos, loadVault, saveSlabPhotos, saveVault } from "./store.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -82,7 +82,7 @@ function renderPage(record) {
     </article>`;
   }).join("");
   const waiting = untitled.map((asset) => `<p><button class="keep" data-issue="${escapeHtml(asset.id)}">Issue title</button> ${escapeHtml(asset.story)}</p>`).join("");
-  const queued = record.requests.map((entry) => `<li>${escapeHtml(entry.action)} ${escapeHtml(entry.status)} · ${escapeHtml(entry.titleId)}</li>`).join("");
+  const queued = record.requests.map((entry) => `<li data-request-id="${escapeHtml(entry.id)}">${escapeHtml(entry.action)} ${escapeHtml(entry.status)} · ${escapeHtml(entry.titleId)}${entry.status === "requested" ? ` <button class="cancel" data-cancel="${encodeURIComponent(entry.id)}" type="button">Cancel</button>` : ""}</li>`).join("");
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -179,6 +179,14 @@ function renderPage(record) {
         location.reload();
       });
     }
+    for (const button of document.querySelectorAll("button[data-cancel]")) {
+      button.addEventListener("click", async () => {
+        if (!confirm("Cancel this request?")) return;
+        const response = await fetch("/requests/" + button.dataset.cancel + "/cancel", { method: "POST" });
+        if (!response.ok) return;
+        location.reload();
+      });
+    }
   </script>
 </body>
 </html>`;
@@ -222,11 +230,25 @@ async function handle(req, res, options) {
   }
   if (req.method === "POST" && url.pathname === "/assets") {
     const body = JSON.parse((await readBody(req)).toString() || "{}");
+    const next = createAsset(record(), {
+      id: body.id,
+      story: body.story,
+      custodianNote: body.custodianNote,
+      archive: body.archive,
+      certId: body.certId,
+    });
     const photos = saveSlabPhotos(options.photoDir, body.certId, {
       front: Buffer.from(body.frontBase64 ?? "", "base64"),
       back: Buffer.from(body.backBase64 ?? "", "base64"),
     });
-    persist(createAsset(record(), { ...body, ...photos }));
+    next.assets[body.id].frontPhoto = photos.frontPhoto;
+    next.assets[body.id].backPhoto = photos.backPhoto;
+    try {
+      persist(next);
+    } catch (error) {
+      discardSlabPhotos(photos);
+      throw error;
+    }
     send(res, 201, "recorded", "text/plain; charset=utf-8");
     return;
   }
@@ -250,6 +272,13 @@ async function handle(req, res, options) {
     }
     persist(queueRequest(record(), titleId, action[2]));
     send(res, 202, "requested", "text/plain; charset=utf-8");
+    return;
+  }
+  const cancellation = url.pathname.match(/^\/requests\/([^/]+)\/cancel$/);
+  if (req.method === "POST" && cancellation) {
+    const requestId = decodeURIComponent(cancellation[1]);
+    persist(cancelRequest(record(), requestId));
+    send(res, 200, "cancelled", "text/plain; charset=utf-8");
     return;
   }
   send(res, 404, "not found", "text/plain; charset=utf-8");

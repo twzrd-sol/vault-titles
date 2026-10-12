@@ -11,7 +11,9 @@ The record is local. No chain transaction runs, and this repository holds no cus
 | assets | id, story, custodian_note, archive, cert_id, front_photo, back_photo |
 | titles | id, asset_id, burned, action |
 | redemptions | title_id, asset_id, action, status |
-| requests | title_id, asset_id, action, status |
+| requests | request_id, title_id, asset_id, action, status |
+
+Each transfer or redeem request gets a UUID. When an older vault database is opened, rows without IDs receive stable `legacy-request:<rowid>` IDs in a SQLite transaction. An active request is one with status `requested`; the same title cannot have two active requests for the same action. Cancelling changes that request's status to `cancelled`, leaving the title on keep and unburned. A cancelled request remains in the record, and a new request of that action can be created.
 
 Photo bytes are files, not blobs: `data/photos/<cert-id>/front` and `back`. The asset row stores those paths.
 
@@ -30,7 +32,8 @@ The process listens on `HOST` or `127.0.0.1`, port `PORT` or `4177`.
 | POST | `/titles/:id/keep` | Sets the holder action to keep |
 | POST | `/titles/:id/transfer` | Queues a request. The title stays on keep and is not burned |
 | POST | `/titles/:id/redeem` | Queues a request the same way |
+| POST | `/requests/:requestId/cancel` | Cancels an active request by its request ID; keeps the title unchanged |
 
 ## Page
 
-Enter a slab, then issue its title. Keep writes the title. Transfer and redeem ask for confirmation, then show `Pending transfer` or `Pending redeem`. Refresh calls `GET /api/vault` and reloads the page from SQLite.
+Enter a slab, then issue its title. Keep writes the title. Transfer and redeem ask for confirmation, then show `Pending transfer` or `Pending redeem`. The request list displays each request ID's action and status; active requests have a Cancel button, and cancelled requests remain visible. Refresh calls `GET /api/vault` and reloads the page from SQLite.
